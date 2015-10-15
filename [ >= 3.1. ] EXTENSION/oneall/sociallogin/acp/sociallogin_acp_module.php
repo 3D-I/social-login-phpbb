@@ -27,6 +27,8 @@ namespace oneall\sociallogin\acp;
 
 class sociallogin_acp_module
 {
+	// Version
+	const USER_AGENT = 'SocialLogin/2.4.9 phpBB/3.1.x (+http://www.oneall.com/)'; 
 	
 	// @var \phpbb\config\config
 	protected $config;
@@ -166,7 +168,7 @@ class sociallogin_acp_module
 			}
 			
 			// Gather API Connection details.
-			$oa_social_login_api_connection_handler = (request_var ('oa_social_login_api_connection_handler', 'curl') == 'fsockopen' ? 'fsockopen' : 'curl');
+			$oa_social_login_api_connection_handler = (request_var ('oa_social_login_api_connection_handler', 'curl') == 'fs' ? 'fsockopen' : 'curl');
 			$oa_social_login_api_connection_port = (request_var ('oa_social_login_api_connection_port', 443) == 80 ? 80 : 443);
 			$oa_social_login_api_subdomain = request_var ('oa_social_login_api_subdomain', '');
 			$oa_social_login_api_key = request_var ('oa_social_login_api_key', '');
@@ -359,7 +361,7 @@ class sociallogin_acp_module
 		else
 		{
 			// Check the handler
-			$api_connection_handler = ($api_connection_handler == 'fsockopen' ? 'fsockopen' : 'curl');
+			$api_connection_handler = ($api_connection_handler == 'fs' ? 'fsockopen' : 'curl');
 			$api_connection_use_https = ($api_connection_port == 443 ? true : false);
 			
 			// FSOCKOPEN
@@ -618,20 +620,15 @@ class sociallogin_acp_module
 	}
 
 	/**
-	 * Insert temporary login and email for validation in oasl_session table
+	 * Insert temporary user_data for validation in oasl_session table
 	 */
-	public function put_session_validation_data ($validation)
+	public function put_session_validation_data ($session_id, $validation)
 	{
 		global $db, $table_prefix;
-		$this->delete_session_validation_data ($validation ['session_id']);
+		$this->delete_session_validation_data ($session_id);
 		$sql_arr = array(
-			'session_id' => $validation ['session_id'],
-			'user_login' => $validation ['user_login'],
-			'user_email' => $validation ['user_email'],
-			'user_token' => $validation ['user_token'],
-			'identity_token' => $validation ['identity_token'],
-			'identity_provider' => $validation ['identity_provider'],
-			'redirect' => $validation ['redirect'],
+			'session_id' => $session_id,
+			'user_data' => $validation,
 			'date_creation' => time () 
 		);
 		$sql = "INSERT INTO " . $table_prefix . 'oasl_session' . " " . $db->sql_build_array ('INSERT', $sql_arr);
@@ -639,7 +636,7 @@ class sociallogin_acp_module
 	}
 
 	/**
-	 * Retrieve temporary login, email for validation
+	 * Retrieve temporary user_data for validation
 	 */
 	public function get_session_validation_data ($session_id)
 	{
@@ -652,7 +649,7 @@ class sociallogin_acp_module
 	}
 
 	/**
-	 * Delete temporary login, email for validation
+	 * Delete temporary user_data for validation
 	 */
 	public function delete_session_validation_data ($session_id)
 	{
@@ -1005,6 +1002,9 @@ class sociallogin_acp_module
 			'draugiem' => array(
 				'name' => 'Draugiem' 
 			),
+			'dribbble' => array(
+				'name' => 'Dribbble'
+			),
 			'facebook' => array(
 				'name' => 'Facebook' 
 			),
@@ -1179,7 +1179,7 @@ class sociallogin_acp_module
 		curl_setopt ($curl, CURLOPT_RETURNTRANSFER, 1);
 		curl_setopt ($curl, CURLOPT_SSL_VERIFYPEER, 0);
 		curl_setopt ($curl, CURLOPT_SSL_VERIFYHOST, 0);
-		curl_setopt ($curl, CURLOPT_USERAGENT, 'SocialLogin phpBB3.1.x (+http://www.oneall.com/)');
+		curl_setopt ($curl, CURLOPT_USERAGENT, self::USER_AGENT);
 		
 		// Does not work in PHP Safe Mode, we manually follow the locations if necessary.
 		curl_setopt ($curl, CURLOPT_FOLLOWLOCATION, 0);
@@ -1187,9 +1187,30 @@ class sociallogin_acp_module
 		// BASIC AUTH?
 		if (isset ($options ['api_key']) && isset ($options ['api_secret']))
 		{
-			curl_setopt ($curl, CURLOPT_USERPWD, $options ['api_key'] . ":" . $options ['api_secret']);
+			curl_setopt ($curl, CURLOPT_USERPWD, $options ['api_key'] . ':' . $options ['api_secret']);
 		}
 		
+		// Proxy Settings
+		if ( ! empty ($options ['proxy_url']))
+		{
+			// Proxy Location
+			curl_setopt ($curl, CURLOPT_PROXYTYPE, CURLPROXY_HTTP);
+			curl_setopt ($curl, CURLOPT_PROXY, $options ['proxy_url']);
+			
+			// Proxy Port
+			if ( ! empty ($options ['proxy_port']))
+			{			
+				curl_setopt ($curl, CURLOPT_PROXYPORT, $options ['proxy_port']);
+			}
+		
+			// Proxy Authentication
+			if ( ! empty ($options ['proxy_username']) && ! empty ($options ['proxy_password']))
+			{
+				curl_setopt ($curl, CURLOPT_PROXYAUTH, CURLAUTH_ANY);
+				curl_setopt ($curl, CURLOPT_PROXYUSERPWD, $options ['proxy_username'] . ':' . $options ['proxy_password']);
+			}
+		}
+				
 		// Make request
 		if (($response = curl_exec ($curl)) !== false)
 		{
@@ -1306,7 +1327,7 @@ class sociallogin_acp_module
 		// Create HTTP request
 		$defaults = array();
 		$defaults ['Host'] = 'Host: ' . $host;
-		$defaults ['User-Agent'] = 'User-Agent: SocialLogin phpBB3.1.x (+http://www.oneall.com/)';
+		$defaults ['User-Agent'] = 'User-Agent: ' . self::USER_AGENT;
 		
 		// BASIC AUTH?
 		if (isset ($options ['api_key']) && isset ($options ['api_secret']))
@@ -2058,13 +2079,8 @@ class sociallogin_acp_module
 				// Return to controller
 				if ($do_validation === true)
 				{
-					return array(
-						'user_login' => $user_data ['user_login'],
-						'user_email' => $user_random_email ? '' : $user_data ['user_email'],
-						'user_token' => $user_data ['user_token'],
-						'identity_token' => $user_data ['identity_token'],
-						'identity_provider' => $user_data ['identity_provider'] 
-					);
+					$user_data ['user_email'] = $user_random_email ? '' : $user_data ['user_email'];
+					return $user_data;
 				}
 				list ($error_message, $user_id) = $this->social_login_user_add ($user_random_email, $user_data);
 			}
@@ -2073,12 +2089,10 @@ class sociallogin_acp_module
 	}
 
 	/**
-	 * Complete social login callback once credentials are validated.
+	 * Resume social login callback once login/email are validated.
 	 */
-	public function social_login_resume_handle_callback ($val_userdata)
+	public function social_login_resume_handle_callback ($user_data)
 	{
-		$user_data = $val_userdata;
-		unset ($user_data ['session_id']);
 		list ($error_message, $user_id) = $this->social_login_user_add (false, $user_data);
 		$this->social_login_redirect ($error_message, $user_id, $user_data);
 	}
